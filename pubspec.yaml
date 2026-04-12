@@ -1,0 +1,58 @@
+name: privachat
+description: Private messenger — messages stored only on device
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Навигация
+  go_router: ^13.0.0
+
+  # Локальная база данных
+  drift: ^2.18.0
+  drift_flutter: ^0.2.0
+  sqlite3_flutter_libs: ^0.5.0
+  path_provider: ^2.1.0
+  path: ^1.9.0
+
+  # Безопасное хранилище (ключи шифрования)
+  flutter_secure_storage: ^9.0.0
+
+  # Сеть
+  web_socket_channel: ^3.0.0
+  http: ^1.2.0
+
+  # Шифрование
+  pointycastle: ^3.9.0
+  encrypt: ^5.0.3
+  crypto: ^3.0.3
+
+  # Изображения
+  image_picker: ^1.1.0
+  cached_network_image: ^3.3.0
+
+  # UI
+  flutter_svg: ^2.0.10+1
+  timeago: ^3.6.1
+
+  # Утилиты
+  uuid: ^4.4.0
+  shared_preferences: ^2.2.3
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.9
+  drift_dev: ^2.18.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
