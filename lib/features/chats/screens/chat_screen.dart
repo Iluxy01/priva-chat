@@ -4,10 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/constants/app_constants.dart';
-import '../../../core/crypto/encryption_service.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/services/chat_service.dart';
-import '../../../core/services/key_exchange_service.dart';
 import '../../../core/services/local_storage_service.dart';
 import '../../../core/services/websocket_service.dart';
 import '../../../core/widgets/connection_status_bar.dart';
@@ -67,14 +65,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (_memberIds.isEmpty) {
       await _fetchMembersFromServer();
-    }
-
-    // Гарантируем наличие AES-ключа чата (сгенерируем+раздадим при необходимости).
-    if (_memberIds.isNotEmpty) {
-      await KeyExchangeService.instance.ensureChatKey(
-        chatId: widget.chatId,
-        memberUserIds: _memberIds,
-      );
     }
 
     if (mounted) setState(() => _loadingMembers = false);
@@ -157,22 +147,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _handleIncoming(WsMessage msg) async {
-    // Расшифровываем (или плейсхолдер, если ключа нет).
-    final plaintext = await KeyExchangeService.instance.decryptIncoming(msg);
-
     // Сохраняем — insertOnConflictUpdate, дублей нет даже если ChatsListScreen уже сохранил
     await LocalStorageService.instance.saveMessage(
       id:        msg.tempId ?? _uuid.v4(),
       chatId:    msg.chatId,
       senderId:  msg.senderId,
-      content:   plaintext,
+      content:   msg.encryptedContent,
       mediaType: msg.mediaType,
       sentAt:    msg.sentAt,
       status:    'delivered',
       isMe:      false,
     );
     await LocalStorageService.instance.updateLastMessage(
-        msg.chatId, plaintext, msg.sentAt);
+        msg.chatId, msg.encryptedContent, msg.sentAt);
 
     if (!_senderNames.containsKey(msg.senderId)) {
       final c = await LocalStorageService.instance.getContact(msg.senderId);
@@ -215,8 +202,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final tempId = _uuid.v4();
     final sentAt = DateTime.now().toUtc().toIso8601String();
 
-    // Локально сохраняем plaintext (наша БД не шифруется — это ок,
-    // она защищена штатным хранилищем приложения).
     await LocalStorageService.instance.saveMessage(
       id:       tempId,
       chatId:   widget.chatId,
@@ -231,32 +216,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
     _scrollToBottom();
 
-    // Шифруем перед отправкой. Если ключ недоступен — отправка блокируется.
-    final chatKey = await KeyExchangeService.instance.ensureChatKey(
-      chatId: widget.chatId,
-      memberUserIds: _memberIds,
-    );
-
-    if (chatKey == null) {
-      debugPrint('[Chat] No chat key — aborting send to prevent plaintext transmission');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('🔒 Ключ шифрования недоступен. Повторите попытку.')),
-        );
-        setState(() => _sending = false);
-      }
-      return;
-    }
-
-    final enc = EncryptionService.encryptMessage(text, chatKey);
-    final String payload = enc.cipher;
-    final String? iv = enc.iv;
-
     final sent = WebSocketService.instance.sendMessage(
       chatId:           widget.chatId,
       tempId:           tempId,
-      encryptedContent: payload,
-      iv:               iv,
+      encryptedContent: text,
       recipientIds:     _memberIds,
     );
 
@@ -334,7 +297,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     await ChatService.deleteChat(widget.chatId);
     await LocalStorageService.instance.deleteChatFull(widget.chatId);
-    await KeyExchangeService.instance.dropChatKey(widget.chatId);
 
     if (mounted) context.go('/chats');
   }

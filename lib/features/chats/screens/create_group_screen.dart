@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/services/chat_service.dart';
-import '../../../core/services/key_exchange_service.dart';
 import '../../../core/services/local_storage_service.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/models/user_model.dart';
@@ -140,16 +139,6 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
           lastSeen: u.lastSeen,
         );
         await storage.saveMember(chatId, u.id);
-      }
-
-      // Генерируем и рассылаем E2E ключ группы всем участникам,
-      // у которых уже есть public_key на устройстве.
-      final recipientIds = _selected.map((u) => u.id).toList();
-      if (recipientIds.isNotEmpty) {
-        await KeyExchangeService.instance.ensureChatKey(
-          chatId: chatId,
-          memberUserIds: recipientIds,
-        );
       }
 
       if (!mounted) return;

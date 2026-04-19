@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'core/crypto/encryption_service.dart';
 import 'core/theme/app_theme.dart';
 import 'core/services/auth_service.dart';
 import 'core/services/presence_service.dart';
@@ -17,30 +16,14 @@ import 'features/search/screens/user_search_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  debugPrint('[Main] App starting...');
 
   // Инициализируем локальную БД
   final db = AppDatabase();
   LocalStorageService.instance.init(db);
-  debugPrint('[Main] LocalStorageService ✅');
 
   // Инициализируем сервис присутствия
   PresenceService.instance.init();
-  debugPrint('[Main] PresenceService ✅');
 
-  // Если пользователь уже залогинен — загружаем RSA-ключи в память заранее.
-  final loggedIn = await AuthService.isLoggedIn();
-  debugPrint('[Main] isLoggedIn: $loggedIn');
-  if (loggedIn) {
-    try {
-      await EncryptionService.ensureKeys();
-      debugPrint('[Main] EncryptionService preloaded ✅ hasKeys=${EncryptionService.hasKeys}');
-    } catch (e) {
-      debugPrint('[Main] EncryptionService preload ❌ (non-fatal): $e');
-    }
-  }
-
-  debugPrint('[Main] runApp');
   runApp(const PrivaChatApp());
 }
 
@@ -55,11 +38,11 @@ final _router = GoRouter(
     return null;
   },
   routes: [
-    GoRoute(path: '/login',        builder: (_, __) => const LoginScreen()),
-    GoRoute(path: '/register',     builder: (_, __) => const RegisterScreen()),
-    GoRoute(path: '/chats',        builder: (_, __) => const ChatsListScreen()),
-    GoRoute(path: '/profile',      builder: (_, __) => const ProfileScreen()),
-    GoRoute(path: '/search',       builder: (_, __) => const UserSearchScreen()),
+    GoRoute(path: '/login',    builder: (_, __) => const LoginScreen()),
+    GoRoute(path: '/register', builder: (_, __) => const RegisterScreen()),
+    GoRoute(path: '/chats',    builder: (_, __) => const ChatsListScreen()),
+    GoRoute(path: '/profile',  builder: (_, __) => const ProfileScreen()),
+    GoRoute(path: '/search',   builder: (_, __) => const UserSearchScreen()),
     GoRoute(path: '/create-group', builder: (_, __) => const CreateGroupScreen()),
     GoRoute(
       path: '/chat/:id',

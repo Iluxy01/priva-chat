@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/services/chat_service.dart';
-import '../../../core/services/key_exchange_service.dart';
 import '../../../core/services/local_storage_service.dart';
 import '../../../core/services/websocket_service.dart';
 import '../../../core/widgets/connection_status_bar.dart';
@@ -47,9 +46,6 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
       // Убедиться что чат существует локально (fix: первое сообщение)
       await _ensureChatExists(msg);
 
-      // Расшифровываем один раз здесь — плейнтекст уйдёт в БД.
-      final plaintext = await KeyExchangeService.instance.decryptIncoming(msg);
-
       // Сохраняем сообщение в БД (fix: сообщение не появлялось при входе в чат)
       final existingMsg = await LocalStorageService.instance
           .getMessages(msg.chatId, limit: 1000)
@@ -59,7 +55,7 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
           id: msg.tempId!,
           chatId: msg.chatId,
           senderId: msg.senderId,
-          content: plaintext,
+          content: msg.encryptedContent,
           mediaType: msg.mediaType,
           sentAt: msg.sentAt,
           status: 'delivered',
@@ -68,17 +64,13 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
       }
 
       await LocalStorageService.instance.updateLastMessage(
-          msg.chatId, plaintext, msg.sentAt);
+          msg.chatId, msg.encryptedContent, msg.sentAt);
 
       // Не считаем unread если чат открыт
       if (msg.chatId != _activeChatId) {
         await LocalStorageService.instance.incrementUnread(msg.chatId);
       }
     });
-
-    // Запускаем обработчик входящих ключевых сообщений (key_bundle / key_request).
-    // Должен стартовать до connect() чтобы не пропустить ранние события.
-    KeyExchangeService.instance.init();
 
     await WebSocketService.instance.connect();
     await _syncChats();
@@ -227,14 +219,12 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     await _markChatDeleted(chat.id);
     await ChatService.deleteChat(chat.id);
     await LocalStorageService.instance.deleteChatFull(chat.id);
-    await KeyExchangeService.instance.dropChatKey(chat.id);
   }
 
   @override
   void dispose() {
     _incomingSub.cancel();
     WebSocketService.instance.removeListener(_onWsChanged);
-    KeyExchangeService.instance.dispose(); // отписываемся от system-сообщений
     super.dispose();
   }
 

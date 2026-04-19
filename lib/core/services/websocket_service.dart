@@ -42,35 +42,6 @@ class WsMessage {
       );
 }
 
-/// Служебное сообщение (обмен ключами и т.п.).
-/// Не показывается в UI, обрабатывается только соответствующим сервисом.
-class WsSystemMessage {
-  final int chatId;
-  final int senderId;
-  final String mediaType;        // 'key_bundle' | 'key_request' | …
-  final String encryptedContent; // сырое тело (JSON / строка)
-  final String? tempId;
-  final String sentAt;
-
-  const WsSystemMessage({
-    required this.chatId,
-    required this.senderId,
-    required this.mediaType,
-    required this.encryptedContent,
-    required this.sentAt,
-    this.tempId,
-  });
-
-  factory WsSystemMessage.fromWsMessage(WsMessage m) => WsSystemMessage(
-        chatId:           m.chatId,
-        senderId:         m.senderId,
-        mediaType:        m.mediaType,
-        encryptedContent: m.encryptedContent,
-        sentAt:           m.sentAt,
-        tempId:           m.tempId,
-      );
-}
-
 class WsAck {
   final String? tempId;
   final int chatId;
@@ -172,21 +143,16 @@ class WebSocketService extends ChangeNotifier {
   // ── Стримы событий ─────────────────────────────────────────────────────────
 
   final _messageCtrl   = StreamController<WsMessage>.broadcast();
-  final _systemCtrl    = StreamController<WsSystemMessage>.broadcast();
   final _ackCtrl       = StreamController<WsAck>.broadcast();
   final _typingCtrl    = StreamController<WsTyping>.broadcast();
   final _readCtrl      = StreamController<WsRead>.broadcast();
   final _presenceCtrl  = StreamController<WsPresence>.broadcast();
 
-  Stream<WsMessage>       get onMessage       => _messageCtrl.stream;
-  Stream<WsSystemMessage> get onSystemMessage => _systemCtrl.stream;
-  Stream<WsAck>           get onAck           => _ackCtrl.stream;
-  Stream<WsTyping>        get onTyping        => _typingCtrl.stream;
-  Stream<WsRead>          get onRead          => _readCtrl.stream;
-  Stream<WsPresence>      get onPresence      => _presenceCtrl.stream;
-
-  /// Типы сообщений, не показываемые в UI (обрабатываются служебно)
-  static const _systemMediaTypes = {'key_bundle', 'key_request'};
+  Stream<WsMessage>  get onMessage  => _messageCtrl.stream;
+  Stream<WsAck>      get onAck      => _ackCtrl.stream;
+  Stream<WsTyping>   get onTyping   => _typingCtrl.stream;
+  Stream<WsRead>     get onRead     => _readCtrl.stream;
+  Stream<WsPresence> get onPresence => _presenceCtrl.stream;
 
   // ── Подключение ────────────────────────────────────────────────────────────
 
@@ -305,14 +271,7 @@ class WebSocketService extends ChangeNotifier {
 
     switch (type) {
       case 'message':
-        final msg = WsMessage.fromJson(json);
-        // Служебные сообщения (ключи) не идут в общий поток —
-        // ChatsListScreen их не видит и не сохраняет как обычные сообщения.
-        if (_systemMediaTypes.contains(msg.mediaType)) {
-          _systemCtrl.add(WsSystemMessage.fromWsMessage(msg));
-        } else {
-          _messageCtrl.add(msg);
-        }
+        _messageCtrl.add(WsMessage.fromJson(json));
         break;
       case 'message_ack':
         _ackCtrl.add(WsAck.fromJson(json));
@@ -428,7 +387,6 @@ class WebSocketService extends ChangeNotifier {
   void dispose() {
     disconnect();
     _messageCtrl.close();
-    _systemCtrl.close();
     _ackCtrl.close();
     _typingCtrl.close();
     _readCtrl.close();
