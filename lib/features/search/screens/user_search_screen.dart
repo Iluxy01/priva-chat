@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../core/services/chat_service.dart';
+import '../../../core/services/key_exchange_service.dart';
 import '../../../core/services/local_storage_service.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/models/user_model.dart';
@@ -86,11 +88,6 @@ class _UserSearchScreenState extends State<UserSearchScreen> {
       if (!mounted) return;
       context.pop(); // закрыть индикатор
 
-      if (chatId == null) {
-        _showSnack('Не удалось создать чат', isError: true);
-        return;
-      }
-
       // Сохраняем чат локально
       await LocalStorageService.instance.saveChat(
         id:     chatId,
@@ -102,9 +99,19 @@ class _UserSearchScreenState extends State<UserSearchScreen> {
       await LocalStorageService.instance.saveMember(chatId, user.id);
       // Получаем своё id из SharedPreferences
       final prefs = await SharedPreferences.getInstance();
-      final myId = prefs.getInt('user_id') ?? 0;
+      final myId = prefs.getInt(AppConstants.userIdKey) ?? 0;
       if (myId != 0) {
         await LocalStorageService.instance.saveMember(chatId, myId);
+      }
+
+      // Инициализируем E2E ключ сразу при создании чата.
+      // Если у собеседника ещё нет public_key — ensureChatKey ничего не отправит,
+      // KeyExchangeService позаботится о переотправке при появлении ключа.
+      if (user.publicKey != null && user.publicKey!.isNotEmpty) {
+        await KeyExchangeService.instance.ensureChatKey(
+          chatId: chatId,
+          memberUserIds: [user.id],
+        );
       }
 
       if (!mounted) return;
