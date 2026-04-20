@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/services/auth_service.dart';
-import '../../../core/services/key_exchange_service.dart';
 import '../../../core/theme/app_theme.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -65,9 +64,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (!mounted) return;
 
       if (result['success']) {
-        print('[RegisterScreen] Запускаем KeyExchangeService...');
-        KeyExchangeService.instance.init();
-        print('[RegisterScreen] KeyExchangeService запущен ✅');
         context.go('/chats');
       } else {
         setState(() => _error = result['error']);

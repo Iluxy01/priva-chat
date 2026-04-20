@@ -8,8 +8,6 @@ import '../../../core/database/app_database.dart';
 import '../../../core/services/chat_service.dart';
 import '../../../core/services/local_storage_service.dart';
 import '../../../core/services/websocket_service.dart';
-import '../../../core/services/key_exchange_service.dart';
-import '../../../core/crypto/encryption_service.dart';
 import '../../../core/widgets/connection_status_bar.dart';
 import '../widgets/message_bubble.dart';
 
@@ -71,18 +69,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (mounted) setState(() => _loadingMembers = false);
     await LocalStorageService.instance.clearUnread(widget.chatId);
-
-    // ─── Шаг E2E: Гарантируем наличие ключа чата ───────────────────────────
-    print('[ChatScreen] _init: обеспечиваем ключ чата ${widget.chatId}...');
-    final allIds = [_myUserId, ..._memberIds];
-    print('[ChatScreen] _init: участники чата: $allIds');
-    final chatKey = await KeyExchangeService.instance.ensureChatKey(
-      chatId: widget.chatId,
-      memberUserIds: allIds,
-    );
-    print('[ChatScreen] _init: ключ чата ${chatKey != null ? "${chatKey.length}B ✅" : "null ⚠️ (ждём bundle от собеседника)"}');
-    // ──────────────────────────────────────────────────────────────────────────
-
     _subscribeWs();
   }
 
@@ -161,33 +147,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _handleIncoming(WsMessage msg) async {
-    print('[ChatScreen] _handleIncoming: chat=${msg.chatId} sender=${msg.senderId} '
-        'type=${msg.mediaType} iv=${msg.iv?.length ?? 0}c');
-
-    // ─── Расшифровываем ─────────────────────────────────────────────────────
-    String displayContent;
-    try {
-      displayContent = await KeyExchangeService.instance.decryptIncoming(msg);
-      print('[ChatScreen] _handleIncoming: расшифровано ✅ "${displayContent.length > 40 ? displayContent.substring(0, 40) + "..." : displayContent}"');
-    } catch (e) {
-      print('[ChatScreen] _handleIncoming: ❌ ошибка расшифровки: $e');
-      displayContent = '[🔒 не удалось расшифровать]';
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    // Сохраняем расшифрованный текст — insertOnConflictUpdate, дублей нет
+    // Сохраняем — insertOnConflictUpdate, дублей нет даже если ChatsListScreen уже сохранил
     await LocalStorageService.instance.saveMessage(
       id:        msg.tempId ?? _uuid.v4(),
       chatId:    msg.chatId,
       senderId:  msg.senderId,
-      content:   displayContent,  // ← plaintext
+      content:   msg.encryptedContent,
       mediaType: msg.mediaType,
       sentAt:    msg.sentAt,
       status:    'delivered',
       isMe:      false,
     );
     await LocalStorageService.instance.updateLastMessage(
-        msg.chatId, displayContent, msg.sentAt);
+        msg.chatId, msg.encryptedContent, msg.sentAt);
 
     if (!_senderNames.containsKey(msg.senderId)) {
       final c = await LocalStorageService.instance.getContact(msg.senderId);
@@ -244,43 +216,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
     _scrollToBottom();
 
-    // ─── Шифруем сообщение ─────────────────────────────────────────────────
-    print('[ChatScreen] _send: получаем ключ чата ${widget.chatId}...');
-    final chatKey = await KeyExchangeService.instance.getChatKey(widget.chatId);
-    String contentToSend;
-    String? ivToSend;
-
-    if (chatKey != null) {
-      print('[ChatScreen] _send: шифруем AES-256-GCM (keyLen=${chatKey.length}B)...');
-      try {
-        final payload = EncryptionService.encryptMessage(text, chatKey);
-        contentToSend = payload.cipher;
-        ivToSend      = payload.iv;
-        print('[ChatScreen] _send: зашифровано ✅ cipher=${payload.cipher.length}c iv=${payload.iv.length}c');
-      } catch (e) {
-        print('[ChatScreen] _send: ❌ ошибка шифрования: $e — отправляем plaintext');
-        contentToSend = text;
-        ivToSend      = null;
-      }
-    } else {
-      print('[ChatScreen] _send: ⚠️ нет ключа чата — отправляем plaintext и запрашиваем ключ');
-      contentToSend = text;
-      ivToSend      = null;
-      // Попытка получить ключ у собеседника
-      for (final rid in _memberIds) {
-        await KeyExchangeService.instance.requestKey(
-          chatId: widget.chatId, senderId: rid,
-        );
-      }
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
     final sent = WebSocketService.instance.sendMessage(
       chatId:           widget.chatId,
       tempId:           tempId,
-      encryptedContent: contentToSend,
+      encryptedContent: text,
       recipientIds:     _memberIds,
-      iv:               ivToSend,
     );
 
     if (!sent) {
