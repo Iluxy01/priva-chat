@@ -42,6 +42,29 @@ class WsMessage {
       );
 }
 
+/// Системное сообщение обмена ключами.
+/// media_type = 'key_bundle' или 'key_request'
+class WsSystemMessage {
+  final int chatId;
+  final int senderId;
+  final String mediaType;
+  final String encryptedContent; // для key_bundle — JSON с обёрнутыми ключами
+
+  const WsSystemMessage({
+    required this.chatId,
+    required this.senderId,
+    required this.mediaType,
+    required this.encryptedContent,
+  });
+
+  factory WsSystemMessage.fromJson(Map<String, dynamic> j) => WsSystemMessage(
+        chatId:           (j['chat_id'] as num).toInt(),
+        senderId:         int.parse(j['sender_id'].toString()),
+        mediaType:        (j['media_type'] as String?) ?? '',
+        encryptedContent: (j['encrypted_content'] as String?) ?? '',
+      );
+}
+
 class WsAck {
   final String? tempId;
   final int chatId;
@@ -143,16 +166,18 @@ class WebSocketService extends ChangeNotifier {
   // ── Стримы событий ─────────────────────────────────────────────────────────
 
   final _messageCtrl   = StreamController<WsMessage>.broadcast();
+  final _systemCtrl    = StreamController<WsSystemMessage>.broadcast(); // ← key_bundle / key_request
   final _ackCtrl       = StreamController<WsAck>.broadcast();
   final _typingCtrl    = StreamController<WsTyping>.broadcast();
   final _readCtrl      = StreamController<WsRead>.broadcast();
   final _presenceCtrl  = StreamController<WsPresence>.broadcast();
 
-  Stream<WsMessage>  get onMessage  => _messageCtrl.stream;
-  Stream<WsAck>      get onAck      => _ackCtrl.stream;
-  Stream<WsTyping>   get onTyping   => _typingCtrl.stream;
-  Stream<WsRead>     get onRead     => _readCtrl.stream;
-  Stream<WsPresence> get onPresence => _presenceCtrl.stream;
+  Stream<WsMessage>       get onMessage       => _messageCtrl.stream;
+  Stream<WsSystemMessage> get onSystemMessage => _systemCtrl.stream; // ← новый стрим
+  Stream<WsAck>           get onAck           => _ackCtrl.stream;
+  Stream<WsTyping>        get onTyping        => _typingCtrl.stream;
+  Stream<WsRead>          get onRead          => _readCtrl.stream;
+  Stream<WsPresence>      get onPresence      => _presenceCtrl.stream;
 
   // ── Подключение ────────────────────────────────────────────────────────────
 
@@ -161,7 +186,7 @@ class WebSocketService extends ChangeNotifier {
 
     final token = await AuthService.getToken();
     if (token == null) {
-      debugPrint('[WS] No token — skip connect');
+      print('[WS] connect: No token — skip connect');
       return;
     }
 
@@ -169,18 +194,17 @@ class WebSocketService extends ChangeNotifier {
 
     try {
       final uri = Uri.parse('${AppConstants.wsUrl}/ws?token=$token');
+      print('[WS] connect: Connecting to $uri...');
       _channel = WebSocketChannel.connect(uri);
 
-      // Ждём подтверждения соединения
       await _channel!.ready;
 
       _setStatus(WsStatus.connected);
       _reconnectAttempts = 0;
       _startPing();
 
-      debugPrint('[WS] Connected ✅');
+      print('[WS] Connected ✅');
 
-      // Слушаем входящие сообщения
       _channel!.stream.listen(
         _onData,
         onError: _onError,
@@ -188,7 +212,7 @@ class WebSocketService extends ChangeNotifier {
         cancelOnError: false,
       );
     } catch (e) {
-      debugPrint('[WS] Connect error: $e');
+      print('[WS] Connect error: $e');
       _setStatus(WsStatus.disconnected);
       _scheduleReconnect();
     }
@@ -203,7 +227,7 @@ class WebSocketService extends ChangeNotifier {
     _channel?.sink.close(ws_status.normalClosure);
     _channel = null;
     _setStatus(WsStatus.disconnected);
-    debugPrint('[WS] Disconnected manually');
+    print('[WS] Disconnected manually');
   }
 
   // ── Отправка сообщений ─────────────────────────────────────────────────────
@@ -217,6 +241,8 @@ class WebSocketService extends ChangeNotifier {
     String mediaType = 'text',
     String? iv,
   }) {
+    print('[WS] sendMessage: chat=$chatId tempId=$tempId type=$mediaType '
+        'recipients=$recipientIds content=${encryptedContent.length}c iv=${iv?.length ?? 0}c');
     return _send({
       'type': 'message',
       'chat_id': chatId,
@@ -263,38 +289,65 @@ class WebSocketService extends ChangeNotifier {
     try {
       json = jsonDecode(raw as String) as Map<String, dynamic>;
     } catch (_) {
+      print('[WS] _onData: JSON parse failed for: $raw');
       return;
     }
 
-    final type = json['type'] as String?;
-    debugPrint('[WS] ← $type');
+    final type      = json['type'] as String?;
+    final mediaType = json['media_type'] as String? ?? '';
+
+    print('[WS] ← type=$type media_type=$mediaType');
 
     switch (type) {
       case 'message':
-        _messageCtrl.add(WsMessage.fromJson(json));
+        // ВАЖНО: key_bundle и key_request — системные сообщения для обмена ключами.
+        // Они НЕ попадают в обычный поток сообщений.
+        if (mediaType == 'key_bundle' || mediaType == 'key_request') {
+          print('[WS] _onData: routing to systemCtrl (mediaType=$mediaType)');
+          try {
+            _systemCtrl.add(WsSystemMessage.fromJson(json));
+          } catch (e) {
+            print('[WS] _onData: ❌ WsSystemMessage.fromJson failed: $e');
+          }
+        } else {
+          print('[WS] _onData: routing to messageCtrl (mediaType=$mediaType)');
+          try {
+            _messageCtrl.add(WsMessage.fromJson(json));
+          } catch (e) {
+            print('[WS] _onData: ❌ WsMessage.fromJson failed: $e');
+          }
+        }
         break;
       case 'message_ack':
-        _ackCtrl.add(WsAck.fromJson(json));
+        try { _ackCtrl.add(WsAck.fromJson(json)); } catch (e) {
+          print('[WS] _onData: ❌ WsAck.fromJson failed: $e');
+        }
         break;
       case 'typing':
-        _typingCtrl.add(WsTyping.fromJson(json));
+        try { _typingCtrl.add(WsTyping.fromJson(json)); } catch (e) {
+          print('[WS] _onData: ❌ WsTyping.fromJson failed: $e');
+        }
         break;
       case 'read':
-        _readCtrl.add(WsRead.fromJson(json));
+        try { _readCtrl.add(WsRead.fromJson(json)); } catch (e) {
+          print('[WS] _onData: ❌ WsRead.fromJson failed: $e');
+        }
         break;
       case 'presence':
-        _presenceCtrl.add(WsPresence.fromJson(json));
+        try { _presenceCtrl.add(WsPresence.fromJson(json)); } catch (e) {
+          print('[WS] _onData: ❌ WsPresence.fromJson failed: $e');
+        }
         break;
       case 'pong':
-        // keepalive — ничего не делаем
+        print('[WS] pong received');
         break;
       default:
-        debugPrint('[WS] Unknown type: $type');
+        print('[WS] Unknown type: $type');
     }
   }
 
   void _onError(Object error) {
-    debugPrint('[WS] Error: $error');
+    print('[WS] Error: $error');
     _setStatus(WsStatus.disconnected);
     _stopPing();
     _scheduleReconnect();
@@ -302,14 +355,12 @@ class WebSocketService extends ChangeNotifier {
 
   void _onDone() {
     final closeCode = _channel?.closeCode;
-    debugPrint('[WS] Connection closed (code: $closeCode)');
+    print('[WS] Connection closed (code: $closeCode)');
     _setStatus(WsStatus.disconnected);
     _stopPing();
 
-    // 4001 = Unauthorized (сервер отклонил токен).
-    // Не переподключаемся — токен невалиден, нужен повторный вход.
     if (closeCode == 4001) {
-      debugPrint('[WS] Auth rejected by server — not reconnecting');
+      print('[WS] Auth rejected by server — not reconnecting');
       return;
     }
     _scheduleReconnect();
@@ -320,7 +371,6 @@ class WebSocketService extends ChangeNotifier {
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
 
-    // Экспоненциальная задержка: 1s, 2s, 4s, 8s, 16s, 32s, 60s (максимум)
     final delay = Duration(
       seconds: (1 << _reconnectAttempts.clamp(0, 6)).clamp(1, 60),
     );
@@ -328,12 +378,11 @@ class WebSocketService extends ChangeNotifier {
     _reconnectAttempts++;
     _setStatus(WsStatus.reconnecting);
 
-    debugPrint('[WS] Reconnect in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
+    print('[WS] Reconnect in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
 
     _reconnectTimer = Timer(delay, () async {
       final token = await AuthService.getToken();
       if (token == null) {
-        // Пользователь вышел — не переподключаемся
         _setStatus(WsStatus.disconnected);
         return;
       }
@@ -362,14 +411,14 @@ class WebSocketService extends ChangeNotifier {
 
   bool _send(Map<String, dynamic> payload) {
     if (_channel == null || _status != WsStatus.connected) {
-      debugPrint('[WS] Cannot send — not connected');
+      print('[WS] Cannot send — not connected (status=$_status)');
       return false;
     }
     try {
       _channel!.sink.add(jsonEncode(payload));
       return true;
     } catch (e) {
-      debugPrint('[WS] Send error: $e');
+      print('[WS] Send error: $e');
       return false;
     }
   }
@@ -377,7 +426,7 @@ class WebSocketService extends ChangeNotifier {
   void _setStatus(WsStatus s) {
     if (_status == s) return;
     _status = s;
-    debugPrint('[WS] Status: $s');
+    print('[WS] Status: $s');
     notifyListeners();
   }
 
@@ -387,6 +436,7 @@ class WebSocketService extends ChangeNotifier {
   void dispose() {
     disconnect();
     _messageCtrl.close();
+    _systemCtrl.close();
     _ackCtrl.close();
     _typingCtrl.close();
     _readCtrl.close();

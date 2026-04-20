@@ -7,6 +7,7 @@ import '../../../core/database/app_database.dart';
 import '../../../core/services/chat_service.dart';
 import '../../../core/services/local_storage_service.dart';
 import '../../../core/services/websocket_service.dart';
+import '../../../core/services/key_exchange_service.dart';
 import '../../../core/widgets/connection_status_bar.dart';
 import '../widgets/chat_tile.dart';
 
@@ -43,10 +44,31 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     // 2) Создаёт чат локально если его ещё нет
     // 3) Обновляет счётчик непрочитанных
     _incomingSub = WebSocketService.instance.onMessage.listen((msg) async {
+      print('[ChatsListScreen] onMessage: chat=${msg.chatId} sender=${msg.senderId} type=${msg.mediaType}');
+
+      // Системные сообщения (key_bundle, key_request) уже обрабатываются
+      // в KeyExchangeService через onSystemMessage — здесь они не придут.
+      // На всякий случай пропускаем:
+      if (msg.mediaType == 'key_bundle' || msg.mediaType == 'key_request') {
+        print('[ChatsListScreen] пропускаем системное сообщение type=${msg.mediaType}');
+        return;
+      }
+
       // Убедиться что чат существует локально (fix: первое сообщение)
       await _ensureChatExists(msg);
 
-      // Сохраняем сообщение в БД (fix: сообщение не появлялось при входе в чат)
+      // ─── Расшифровываем ───────────────────────────────────────────────────
+      String displayContent;
+      try {
+        displayContent = await KeyExchangeService.instance.decryptIncoming(msg);
+        print('[ChatsListScreen] расшифровано ✅');
+      } catch (e) {
+        print('[ChatsListScreen] ❌ ошибка расшифровки: $e');
+        displayContent = '[🔒 не удалось расшифровать]';
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      // Сохраняем расшифрованный текст (fix: сообщение не появлялось при входе в чат)
       final existingMsg = await LocalStorageService.instance
           .getMessages(msg.chatId, limit: 1000)
           .then((list) => list.any((m) => m.id == (msg.tempId ?? '')));
@@ -55,7 +77,7 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
           id: msg.tempId!,
           chatId: msg.chatId,
           senderId: msg.senderId,
-          content: msg.encryptedContent,
+          content: displayContent,   // ← plaintext
           mediaType: msg.mediaType,
           sentAt: msg.sentAt,
           status: 'delivered',
@@ -64,7 +86,7 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
       }
 
       await LocalStorageService.instance.updateLastMessage(
-          msg.chatId, msg.encryptedContent, msg.sentAt);
+          msg.chatId, displayContent, msg.sentAt);
 
       // Не считаем unread если чат открыт
       if (msg.chatId != _activeChatId) {

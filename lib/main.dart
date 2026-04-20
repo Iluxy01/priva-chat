@@ -3,6 +3,8 @@ import 'package:go_router/go_router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/services/auth_service.dart';
 import 'core/services/presence_service.dart';
+import 'core/services/key_exchange_service.dart';
+import 'core/crypto/encryption_service.dart';
 import 'core/database/app_database.dart';
 import 'core/services/local_storage_service.dart';
 import 'features/auth/screens/login_screen.dart';
@@ -17,13 +19,36 @@ import 'features/search/screens/user_search_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  print('[main] 🚀 Запуск PrivaChat...');
+
   // Инициализируем локальную БД
+  print('[main] Инициализация локальной БД...');
   final db = AppDatabase();
   LocalStorageService.instance.init(db);
+  print('[main] БД готова ✅');
 
   // Инициализируем сервис присутствия
   PresenceService.instance.init();
 
+  // Если пользователь уже залогинен — инициализируем шифрование и обмен ключами
+  final loggedIn = await AuthService.isLoggedIn();
+  print('[main] Пользователь залогинен: $loggedIn');
+
+  if (loggedIn) {
+    print('[main] Загружаем ключи шифрования...');
+    try {
+      await EncryptionService.ensureKeys();
+      print('[main] Ключи шифрования готовы ✅');
+    } catch (e) {
+      print('[main] ⚠️ Ошибка загрузки ключей: $e');
+    }
+
+    print('[main] Запускаем KeyExchangeService...');
+    KeyExchangeService.instance.init();
+    print('[main] KeyExchangeService запущен ✅');
+  }
+
+  print('[main] runApp...');
   runApp(const PrivaChatApp());
 }
 
